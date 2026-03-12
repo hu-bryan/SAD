@@ -18,7 +18,7 @@ The core question of this project is:
 
 This question came from a limitation I saw in diffusion-style guidance. In diffusion-based generation, if you want to guide the process at intermediate steps, you typically score the **current noisy intermediate state**. But those states are not yet close to the final sample, so the score can be unstable or hard to interpret.
 
-Flow maps offer a different possibility. Because the model carries a **look-ahead estimate** of where the sample is expected to end up at time \( t = 1 \), guidance can be based on the model’s current best estimate of the **final image**, rather than the current noisy state.
+Flow maps offer a different possibility. Because the model carries a **look-ahead estimate** of where the sample is expected to end up at time $ t = 1 $, guidance can be based on the model’s current best estimate of the **final image**, rather than the current noisy state.
 
 My hypothesis was that this would make representativeness-guided sampling more meaningful and more stable for data distillation.
 
@@ -107,15 +107,15 @@ Synthetic images were generated using **Euler–Maruyama** sampling.
 In the experiments, I used:
 
 - **2500 Euler–Maruyama steps**
-- a representativeness strength parameter \( \gamma \)
+- a representativeness strength parameter $ \gamma $
 - a pretrained flow map trained beforehand
 
 Empirically, fewer steps produced noisier images and worse quality. Around 2500 steps gave much better convergence.
 
 For the reward strength, I found that:
 
-- **\( \gamma = 0.2 \)** worked best
-- larger values, especially **\( \gamma \ge 0.5 \)**, made images too abstract
+- **$ \gamma = 0.2 $** worked best
+- larger values, especially **$ \gamma \ge 0.5 $**, made images too abstract
 
 So there was a clear tradeoff: stronger reward increased representativeness pressure, but too much reward damaged image quality.
 
