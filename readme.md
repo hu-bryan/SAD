@@ -1,208 +1,196 @@
-# Generative Data Distillation with Reward-Guided Flow Models
+# Generative Data Distillation with Reward-Attuned Flow Maps
 
 ## Introduction
 
-Training modern machine learning models often requires very large datasets, which can be expensive to store, train on, and distribute. **Data distillation** aims to compress a large dataset into a much smaller synthetic dataset that preserves most of the original dataset’s utility for downstream learning tasks.
+This project studies a generative approach to **dataset distillation**: compressing a large real dataset into a very small synthetic dataset that still preserves downstream training utility.
 
-This project explores a **generative approach to data distillation**, where synthetic samples are generated using a generative model rather than optimized directly through expensive bilevel optimization. The goal is to produce a small set of synthetic images that, when used for training, achieve competitive performance on downstream classification tasks.
+The main idea is to generate distilled images using a **flow-based generative model** and guide sampling with a **representativeness reward**. Instead of optimizing pixels directly through expensive bilevel optimization, the method uses a pretrained **flow map** to generate candidate images and nudges the generation process toward samples that are more representative of the underlying class distribution.
 
-Instead of relying on traditional pixel-level optimization approaches, this project investigates **reward-guided generation**, where a generative model produces candidate samples that are nudged toward being representative of the original dataset.
-
-The core research question explored is:
-
-> Can a generative model produce high-quality distilled datasets by guiding generation with a representativeness reward?
+The project was developed and evaluated primarily on **CIFAR-10**, with downstream validation using **ResNet-18**.
 
 ---
 
-# Hypothesis
+## Hypothesis
 
-Early work in data distillation relied on **computationally expensive bilevel optimization**, where synthetic samples were directly optimized to train a downstream model.
+The core question of this project is:
 
-Later work introduced **generative approaches**, particularly using GANs and diffusion models. Diffusion-based methods guide generation using gradients computed from intermediate noisy states of the image.
+> Can a flow-based generative model with look-ahead improve representativeness-guided sampling for data distillation?
 
-However, scoring intermediate noisy states can produce unstable or misleading signals, since those states may not resemble the final generated sample.
+This question came from a limitation I saw in diffusion-style guidance. In diffusion-based generation, if you want to guide the process at intermediate steps, you typically score the **current noisy intermediate state**. But those states are not yet close to the final sample, so the score can be unstable or hard to interpret.
 
-This project investigates a different generative paradigm based on **flow-based models**.
+Flow maps offer a different possibility. Because the model carries a **look-ahead estimate** of where the sample is expected to end up at time \( t = 1 \), guidance can be based on the model’s current best estimate of the **final image**, rather than the current noisy state.
 
-Unlike diffusion models, the flow model used in this project carries an estimate of the **expected final sample** during the generation process. This enables a **look-ahead reward mechanism**, where generation is guided using an estimate of the final image rather than the current noisy intermediate state.
-
-The hypothesis explored in this project is therefore:
-
-> Flow-based generative models with look-ahead reward guidance provide a more stable and interpretable signal for data distillation compared to diffusion-based guidance.
+My hypothesis was that this would make representativeness-guided sampling more meaningful and more stable for data distillation.
 
 ---
 
-# Pipeline and Methodology
+## Pipeline and Methodology
 
-The system is structured as an **end-to-end generative data distillation pipeline**.
+## Overview
 
-## Pipeline Overview
+The pipeline can be summarized as:
 
-```
-Dataset
+```text
+Real dataset (CIFAR-10)
   ↓
-Feature Extraction
+Pretrained flow map
   ↓
-Generative Model Sampling (Flow Model)
+Look-ahead estimate of final sample during generation
   ↓
-Reward-Guided Generation
+Representativeness reward computed from U-Net hidden states
   ↓
-Synthetic Dataset
+Reward-guided Euler–Maruyama sampling
   ↓
-Classifier Training
+Synthetic distilled dataset
   ↓
-Evaluation on Real Test Set
+Train ResNet-18 on synthetic data
+  ↓
+Evaluate on real test set
 ```
 
-The pipeline consists of several key stages.
+---
+
+## 1. Pretrained Flow Map
+
+The project uses a **pretrained flow map** as the generative model.
+
+A key property of the flow map is that it supports **look-ahead**: during generation, the model can estimate what the sample is expected to look like at the end of the trajectory. That estimate is then used inside the reward-guided sampling procedure.
+
+This is the main modeling decision of the project. The flow model is not used just as a generic image generator. It is used specifically because its look-ahead structure makes reward guidance more natural than in diffusion-style intermediate-state scoring.
 
 ---
 
-## 1. Feature Extraction
+## 2. Representativeness-Guided Sampling
 
-Images from the original dataset are embedded using intermediate features from a pretrained convolutional network.
+The generation process is guided by a representativeness reward.
 
-These feature representations are used to measure **representativeness** of generated samples relative to the real dataset.
+At each stage of sampling, I use the flow map’s look-ahead estimate of the final image and score how representative that sample is relative to real examples from the same class.
 
----
+The reward is based on distances between hidden representations, averaged across training images from a class. The purpose of this reward is to push generation toward regions of the data distribution that better capture class structure.
 
-## 2. Generative Model
+Conceptually, the guided process modifies the drift term so that the model follows both:
 
-A **flow-based generative model** is used to generate synthetic samples.
+- the default generative dynamics, and
+- a reward gradient encouraging representativeness
 
-The generation process proceeds through a sequence of steps transforming noise into a structured sample. Unlike diffusion models, the flow model provides an estimate of the **expected final sample** during generation.
-
-This enables reward guidance to operate on a **look-ahead prediction** rather than the current intermediate state.
-
----
-
-## 3. Reward-Guided Sampling
-
-During generation, samples are scored using a **representativeness reward function**.
-
-The reward measures how well the generated sample covers regions of the dataset distribution in feature space.
-
-Generation is nudged using:
-
-```
-Modified Drift = Model Drift + λ * Reward Gradient
-```
-
-Where:
-
-- `λ` is a scaling hyperparameter controlling reward strength
-- the reward gradient pushes samples toward representative regions of the dataset
-
-This creates a **guided generative process** that biases the model toward producing useful distilled samples.
+This produces a synthetic sample that is not just plausible, but hopefully more useful for downstream classification.
 
 ---
 
-## 4. Synthetic Dataset Construction
+## 3. Hidden-State Scoring in the U-Net Backbone
 
-The generative model produces a small synthetic dataset consisting of only a few samples per class.
+I did **not** use a separate feature extractor pipeline.
 
-These synthetic samples serve as the **distilled dataset**.
+Instead, the representativeness score was computed using hidden representations taken from the **U-Net backbone of the flow model itself**.
 
----
+More specifically, the score used an averaged mixture of hidden states from selected encoder-side blocks:
 
-## 5. Downstream Evaluation
+- `32x32 block3`
+- `16x16 block3`
+- `8x8 block3` (bottleneck)
 
-The quality of the distilled dataset is evaluated using downstream classification performance.
+The idea was to compare generated and real images in the model’s own learned hidden space, rather than in raw pixel space.
 
-A classifier is trained using the synthetic dataset and evaluated on the real dataset's test split.
+This was important for two reasons:
 
-Performance metrics include:
+1. pixel-space similarity is often too brittle or too low-level for dataset distillation
+2. hidden states inside the U-Net give a more meaningful notion of semantic similarity for the reward
 
-- classification accuracy
-- stability across architectures
-- qualitative inspection of generated samples
-
-The core evaluation principle is:
-
-> Synthetic data quality is determined by downstream task performance.
+I avoided decoder-side blocks because they tended to introduce more pixel-level abstraction into the score and could make images overly abstract.
 
 ---
 
-# Experiment Tracking with Weights & Biases
+## 4. Sampling Method
 
-Experiments are tracked using **Weights & Biases (W&B)** to ensure reproducibility and systematic experimentation.
+Synthetic images were generated using **Euler–Maruyama** sampling.
 
-Each run logs:
+In the experiments, I used:
 
-- model configuration
-- reward scaling parameter (`λ`)
-- sampling configuration
-- classifier training metrics
-- final evaluation accuracy
-- runtime and system metrics
+- **2500 Euler–Maruyama steps**
+- a representativeness strength parameter \( \gamma \)
+- a pretrained flow map trained beforehand
 
-### Hyperparameter Sweeps
+Empirically, fewer steps produced noisier images and worse quality. Around 2500 steps gave much better convergence.
 
-To identify effective reward scaling values, hyperparameter sweeps are performed over:
+For the reward strength, I found that:
 
-```
-λ ∈ {0.01, 0.1, 0.5, 1, 5, 10}
-```
+- **\( \gamma = 0.2 \)** worked best
+- larger values, especially **\( \gamma \ge 0.5 \)**, made images too abstract
 
-This allows automated comparison of reward strength and its effect on downstream performance.
-
-### Logged Metrics
-
-Each experiment records:
-
-- training loss
-- reward magnitude
-- classifier accuracy
-- runtime
-- GPU utilization
-
-This structured tracking makes experiments **reproducible and comparable**.
+So there was a clear tradeoff: stronger reward increased representativeness pressure, but too much reward damaged image quality.
 
 ---
 
-# Results
+## 5. Distilled Dataset Construction and Evaluation
 
-The reward-guided generative approach successfully produced synthetic datasets capable of training classifiers with meaningful performance on the original dataset.
+Once synthetic images were generated, they were collected into a distilled dataset and used to train a downstream classifier.
 
-Key observations include:
+The main downstream evaluation model was:
 
-- reward guidance significantly influences sample representativeness
-- excessively large reward scaling leads to over-abstract samples
-- moderate reward strength improves downstream classifier performance
-- flow-based models enable more stable reward guidance than diffusion-style intermediate scoring
+- **ResNet-18**
 
-While the project is exploratory in nature, results demonstrate that **generative approaches to data distillation are viable and promising**.
+Evaluation was done by training on the synthetic dataset and testing on the real test data.
 
----
+This is a key point in the project:
 
-# Conclusion
-
-This project explored **reward-guided generative data distillation using flow-based models**.
-
-The key contribution is the use of **look-ahead reward guidance**, which evaluates the expected final sample rather than noisy intermediate states during generation.
-
-This approach offers several advantages:
-
-- more interpretable reward signals
-- improved stability during guided sampling
-- flexible generative pipelines for dataset compression
-
-The project demonstrates the feasibility of combining **generative modeling with data distillation**, and suggests that flow-based models provide a promising alternative to diffusion-based guidance.
-
-Future work could explore:
-
-- larger datasets (e.g. ImageNet)
-- stronger reward functions
-- alternative generative architectures
-- improved evaluation across multiple downstream models
+> The real measure of success is not just whether the generated images look good, but whether they preserve enough information to support downstream learning.
 
 ---
 
-# Technologies Used
+## Experiment Tracking and Monitoring with Weights & Biases
 
-- Python  
-- PyTorch  
-- JAX  
-- Weights & Biases  
-- Flow-based generative models  
-- Convolutional neural networks
+The codebase includes **Weights & Biases (W&B)** for experiment tracking and monitoring.
+
+W&B was used to document and compare runs by logging:
+
+- experiment progress
+- training and optimization losses
+- downstream classifier accuracy
+- best accuracy achieved so far
+- standard deviation across evaluations
+- synthetic image snapshots
+- latent code histograms
+- synthetic pixel histograms
+- run configurations and hyperparameters
+
+This made it much easier to compare runs and analyze how changes in reward strength, sampling behavior, or optimization settings affected the final distilled dataset.
+
+In particular, W&B is useful here because this project has several moving parts that interact:
+
+- generative sampling behavior
+- reward-guidance strength
+- downstream evaluation performance
+- qualitative image quality
+
+Tracking all of those together in one place makes the project much more reproducible and easier to debug.
+
+---
+
+## Conclusion
+
+This project explored whether **flow-based models with look-ahead** can improve **representativeness-guided sampling** for dataset distillation.
+
+The main contribution is not just using a flow model as a generator, but using a **flow map specifically for its look-ahead property**. That lets guidance depend on the model’s estimate of the final image, rather than on a noisy intermediate state.
+
+The representativeness reward was computed using hidden states from selected blocks of the model’s **U-Net backbone**, allowing guidance to happen in a learned representation space rather than raw pixel space.
+
+In its current form, the project should be viewed as a proof of concept, but it demonstrates a promising idea:
+
+- flow maps provide a natural mechanism for look-ahead guidance
+- representativeness-guided generation can be adapted to dataset distillation
+- hidden-state scoring inside the generator offers a meaningful way to define the reward
+
+A stronger next version of the project would include broader ablations, larger-scale experiments, and stronger comparisons against other generative distillation methods.
+
+---
+
+## Tech Stack
+
+- Python
+- PyTorch
+- JAX
+- Weights & Biases
+- Flow-based generative modeling
+- Euler–Maruyama sampling
+- ResNet-18 evaluation
+- CIFAR-10
