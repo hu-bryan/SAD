@@ -18,7 +18,7 @@ The core question of this project is:
 
 This question came from a limitation I saw in diffusion-style guidance. In diffusion-based generation, if you want to guide the process at intermediate steps, you typically score the **current noisy intermediate state**. But those states are not yet close to the final sample, so the score can be unstable or hard to interpret.
 
-Flow maps offer a different possibility. Because the model carries a **look-ahead estimate** of where the sample is expected to end up at time$t = 1$, guidance can be based on the model’s current best estimate of the **final image**, rather than the current noisy state.
+Flow maps offer a different possibility. Because the model carries a **look-ahead estimate** of where the sample is expected to end up at time $t = 1$, guidance can be based on the model’s current best estimate of the **final image**, rather than the current noisy state.
 
 My hypothesis was that this would make representativeness-guided sampling more meaningful and more stable for data distillation.
 
@@ -50,9 +50,9 @@ Evaluate on real test set
 
 ---
 
-## 1. Pretrained Flow Map
+## 1. Training the Flow Map
 
-The project uses a **pretrained flow map** as the generative model.
+The project uses a flow map as the generative model. It is trained from on CIFAR-10 images.
 
 A key property of the flow map is that it supports **look-ahead**: during generation, the model can estimate what the sample is expected to look like at the end of the trajectory. That estimate is then used inside the reward-guided sampling procedure.
 
@@ -79,9 +79,7 @@ This produces a synthetic sample that is not just plausible, but hopefully more 
 
 ## 3. Hidden-State Scoring in the U-Net Backbone
 
-I did **not** use a separate feature extractor pipeline.
-
-Instead, the representativeness score was computed using hidden representations taken from the **U-Net backbone of the flow model itself**.
+The representativeness score was computed using hidden representations taken from the U-Net backbone of the flow model itself.
 
 More specifically, the score used an averaged mixture of hidden states from selected encoder-side blocks:
 
@@ -114,8 +112,8 @@ Empirically, fewer steps produced noisier images and worse quality. Around 2500 
 
 For the reward strength, I found that:
 
-- **$\gamma = 0.2$** worked best
-- larger values, especially **$\gamma \ge 0.5$**, made images too abstract
+- ** $\gamma = 0.2$ ** worked best
+- larger values, especially ** $\gamma \ge 0.5$ **, made images too abstract
 
 So there was a clear tradeoff: stronger reward increased representativeness pressure, but too much reward damaged image quality.
 
@@ -125,9 +123,7 @@ So there was a clear tradeoff: stronger reward increased representativeness pres
 
 Once synthetic images were generated, they were collected into a distilled dataset and used to train a downstream classifier.
 
-The main downstream evaluation model was:
-
-- **ResNet-18**
+The main downstream evaluation model was ResNet-18.
 
 Evaluation was done by training on the synthetic dataset and testing on the real test data.
 
@@ -139,7 +135,7 @@ This is a key point in the project:
 
 ## Experiment Tracking and Monitoring with Weights & Biases
 
-The codebase includes **Weights & Biases (W&B)** for experiment tracking and monitoring.
+The codebase includes Weights & Biases (W&B) for experiment tracking and monitoring.
 
 W&B was used to document and compare runs by logging:
 
@@ -168,11 +164,11 @@ Tracking all of those together in one place makes the project much more reproduc
 
 ## Conclusion
 
-This project explored whether **flow-based models with look-ahead** can improve **representativeness-guided sampling** for dataset distillation.
+This project explored whether flow-based models with look-ahead can improve representativeness-guided sampling for dataset distillation.
 
-The main contribution is not just using a flow model as a generator, but using a **flow map specifically for its look-ahead property**. That lets guidance depend on the model’s estimate of the final image, rather than on a noisy intermediate state.
+The main contribution is not just using a flow model as a generator, but using a flow map specifically for its look-ahead property. That lets guidance depend on the model’s estimate of the final image, rather than on a noisy intermediate state.
 
-The representativeness reward was computed using hidden states from selected blocks of the model’s **U-Net backbone**, allowing guidance to happen in a learned representation space rather than raw pixel space.
+The representativeness reward was computed using hidden states from selected blocks of the model’s U-Net backbone, allowing guidance to happen in a learned representation space rather than raw pixel space.
 
 In its current form, the project should be viewed as a proof of concept, but it demonstrates a promising idea:
 
